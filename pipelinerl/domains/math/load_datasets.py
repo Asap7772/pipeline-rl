@@ -20,6 +20,14 @@ and this will not parse:
 
 logger = logging.getLogger(__name__)
 
+def process_proof_problem(dataset, dataset_name):
+    for row in dataset:
+        yield {
+            "dataset": dataset_name,
+            "task": row["problem"],           # problem statement
+            "answer": row["solution"],        # reference solution
+            "schema": row["schema_0"],        # marking scheme
+        }
 
 def process_eurus(dataset):
     for item in dataset:
@@ -247,7 +255,10 @@ def load_datasets(
             if config is not None:
                 load_args += (config,)
             dataset = load_dataset(*load_args, split=split, trust_remote_code=trust_remote_code)
-            samples = [dict(row) for row in dataset]
+            if hub_id in ["hf-imo-colab/olympiads-proof-schema", "hf-imo-colab/olympiads-proof-schema-benchmark"]:
+                samples = [s for s in process_proof_problem(dataset, hub_id.split("/")[-1]) if s is not None]
+            else:
+                samples = [dict(row) for row in dataset]
             for sample in samples:
                 sample.setdefault("dataset", hub_id)
             logger.info(
