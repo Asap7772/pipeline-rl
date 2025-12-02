@@ -2,6 +2,7 @@ import time
 import random
 
 import aiohttp
+import os
 from omegaconf import DictConfig
 from pydantic import BaseModel
 from pipelinerl.rollouts import RolloutResult, BaseMetrics
@@ -11,6 +12,21 @@ from tapeagents.llms.trainable import TrainableLLM
 
 from pipelinerl.async_llm import llm_async_generate, make_training_text
 from .verifier_api import verify_answer_rpc, verify_proof
+
+def remove_reasoning(completion: str, reasoning_delimiters: list[str] = None) -> str:
+    if reasoning_delimiters is not None:
+        # Split final answer from reasoning content
+        is_reasoning_complete = False
+        for delim in reasoning_delimiters:
+            if delim in completion:
+                completion = completion.split(delim)[-1]
+                is_reasoning_complete = True
+                return completion.strip()
+        if not is_reasoning_complete:
+            return ""
+    else:
+        return completion
+    
 
 class Metrics(BaseMetrics):
     penalty: float
@@ -51,6 +67,13 @@ async def generate_math_rollout(
     latency = time.time() - time_start
 
     assert llm_call.output.content is not None
+    generation_raw = llm_call.output.content
+    reasoning_delimiters = (
+        cfg.llm_grader.reasoning_delimiters
+        if "reasoning_delimiters" in cfg.llm_grader
+        else None
+    )
+    generation_final_answer = remove_reasoning(generation_raw, reasoning_delimiters=reasoning_delimiters)
     rewards = RewardTable(**dict(cfg.rewards))
     discount_factor = cfg.actor.discount_factor
 
@@ -59,13 +82,19 @@ async def generate_math_rollout(
     # ===========================================================
     # PROOF-BASED SCORING BRANCH
     # ===========================================================
+    verifier_metrics: dict[str, float | int] = {}
     if "schema" in problem:
-        score = await verify_proof(
+        verification = await verify_proof(
             problem=problem["task"],
             ref_solution=problem["answer"],
             schema=problem["schema"],
-            generation=llm_call.output.content,
+            generation=generation_final_answer,
+            model=getattr(cfg.llm_grader, "name", None) if "/" in getattr(cfg.llm_grader, "name", "") else os.getenv("HF_ENDPOINT_REPO"),
+            sampling_kwargs=getattr(cfg.llm_grader, "sampling_kwargs", None),
+            log_wandb_metrics=cfg.wandb.use_wandb,
         )
+        score = verification.score
+        verifier_metrics = verification.metrics
         # normalize score to [0, 1]
         reward = (score / 7.0) * (discount_factor ** llm_call.output_length_tokens)
 
@@ -152,5 +181,5 @@ async def generate_math_rollout(
         metrics=metrics,
         latency=latency,
         dataset_name=problem.get("dataset"),
+        verifier_metrics=verifier_metrics,
     )
-

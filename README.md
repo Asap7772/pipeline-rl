@@ -15,16 +15,18 @@
 Install the required dependencies from the root directory as follows:
 
 ```sh
-./install_hf.sh
+# Dependencies for training
+./install.sh
+
+# Dependencies for local LLM grader server (optional)
+./install_grader.sh
 ```
 
-Then copy the `.env.template` to `.env` and add your Hugging Face token and endpoint ID:
+Then make sure you are authenticated with the Hugging Face Hub:
 
+```sh
+huggingface-cli login
 ```
-cp .env.template .env
-```
-
-The endpoint is needed for the proof-based pipeline to access the grader on Hugging Face inference endpoints. Ask Lewis for access if you don't have it.
 
 ## Sample command
 
@@ -44,11 +46,25 @@ sbatch --nodes=<num_nodes> run_hf.slurm --config <config_name> --job-name <job_n
 
 ## Recipes
 
-### Proof-based pipeline
+### Proof-verification pipeline
 
 ```sh
-python -m pipelinerl.launch --config-name=proof_qwen3-4b-instruct output_dir=tmp/results/proof_qwen3-4b-instruct/ 
+# Interactive run - use a timestamped job name to avoid collisions
+timestamp=$(date +'%Y%m%d-%H%M%S'); python -m pipelinerl.launch --config-name=proof_qwen3-4b-instruct-8k output_dir="tmp/results/proof_qwen3-4b-instruct-8k-${timestamp}" 
+
+# Slurm
+timestamp=$(date +'%Y%m%d-%H%M%S'); sbatch --job-name=prl-qwen3-4b-instruct-8k --nodes=2 run_hf.slurm --config proof_qwen3-4b-instruct-8k --job-name "proof_qwen3-4b-instruct-8k-${timestamp}"
 ```
+
+This pipeline depends on an external LLM grader for proof verification. You can either run the grader locally on the Hugging Face cluster or by calling a deployed inference endpoint. The choice is determined by the `llm_grader.name` field in the config:
+
+```yaml
+llm_grader:
+  name: openai/gpt-oss-20b          # for local grader server
+  # name: gpt-oss-120b-twj          # for deployed endpoint
+```
+
+When you launch the training job, the grader server/endpoint will start automatically.
 
 
 # Hugging Face Hub integration
@@ -157,7 +173,7 @@ conda run --no-capture-output -n pipeline-rl pip install torch==2.6.0
 conda run --no-capture-output -n pipeline-rl pip install -e . --no-build-isolation
 ```
 
-By default Pipeline-RL will use the file system as the medium for streaming the generated data to the trainer processes. This works on one node, but the files can get quite large. To use Redis instead you will need to install the Redis server in the same conda environment:
+  By default Pipeline-RL will use the file system as the medium for streaming the generated data to the trainer processes. This works on one node, but the files can get quite large. To use Redis instead you will need to install the Redis server in the same conda environment:
 ```bash
 conda install redis-server==7.4.0 -c conda-forge 
 ```
